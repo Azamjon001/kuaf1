@@ -5,8 +5,8 @@ import sqlite3
 from datetime import datetime
 
 # Настройки
-BOT_TOKEN = "7482941211:AAHFdieVCnuCdZaLH_C6XQbA0hBeZHFtyrU"
-DEAN_USER_ID = 7172751568  # ID проректора в Telegram
+BOT_TOKEN = "8245945626:AAFoGNoWP-JZTRUt9AdoYF9T891GCDXOGlo"
+DEAN_USER_ID = 6224232118  # ID проректора в Telegram
 
 # Состояния диалога
 CATEGORY, NAME, FACULTY, CONTACT, TEACHER_SUBJECT, PARENT_STUDENT_NAME, CONTENT = range(7)
@@ -417,3 +417,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
