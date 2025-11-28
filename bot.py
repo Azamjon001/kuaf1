@@ -1,3 +1,4 @@
+
 import logging
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
@@ -270,7 +271,7 @@ async def send_to_dean(update: Update, context: ContextTypes.DEFAULT_TYPE, user_
             f"📨 **YANGI MUROJAAT**\n\n"
             f"**📋 Murojatchi turi:** {category_name}\n"
             f"**👤 F.I.O:** {clean_full_name}\n"
-            f"**🔗 Telegram:** @{clean_username}\n"
+            f"**🔗 Telegram:** {clean_username}\n"
         )
         
         if category == "teacher":
