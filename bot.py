@@ -1,9 +1,7 @@
-
 import logging
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
 import sqlite3
-from datetime import datetime
 
 # Настройки
 BOT_TOKEN = "8245945626:AAFoGNoWP-JZTRUt9AdoYF9T891GCDXOGlo"
@@ -29,9 +27,7 @@ def init_db():
                   message_type TEXT,
                   content TEXT,
                   file_id TEXT,
-                  timestamp DATETIME,
-                  dean_response TEXT,
-                  response_timestamp DATETIME)''')
+                  dean_response TEXT)''')
     conn.commit()
     conn.close()
 
@@ -172,7 +168,6 @@ async def handle_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = context.user_data
     user_id = update.effective_user.id
     username = update.effective_user.username or update.effective_user.first_name or "Ko'rsatilmagan"
-    timestamp = datetime.now()
     
     # Проверяем тип сообщения - разрешены только текст и фото
     if update.message.voice or update.message.audio or update.message.video:
@@ -216,8 +211,8 @@ async def handle_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Сохраняем все данные в базу
     c.execute('''INSERT INTO complaints 
-                 (user_id, username, category, full_name, faculty, contact, teacher_subject, parent_student_name, message_type, content, file_id, timestamp)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                 (user_id, username, category, full_name, faculty, contact, teacher_subject, parent_student_name, message_type, content, file_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
               (user_id, 
                username,
                user_data['category'],
@@ -226,7 +221,7 @@ async def handle_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
                user_data.get('contact', 'Ko\'rsatilmagan'),
                user_data.get('teacher_subject', ''),
                user_data.get('parent_student_name', ''),
-               message_type, content, file_id, timestamp))
+               message_type, content, file_id))
     conn.commit()
     conn.close()
     
@@ -271,7 +266,7 @@ async def send_to_dean(update: Update, context: ContextTypes.DEFAULT_TYPE, user_
             f"📨 **YANGI MUROJAAT**\n\n"
             f"**📋 Murojatchi turi:** {category_name}\n"
             f"**👤 F.I.O:** {clean_full_name}\n"
-            f"**🔗 Telegram:** {clean_username}\n"
+            f"**🔗 Telegram:** @{clean_username}\n"
         )
         
         if category == "teacher":
@@ -376,7 +371,6 @@ async def handle_dean_response(update: Update, context: ContextTypes.DEFAULT_TYP
         return ConversationHandler.END
     
     dean_response = update.message.text
-    timestamp = datetime.now()
     
     try:
         # Очищаем ответ от Markdown символов
@@ -387,9 +381,9 @@ async def handle_dean_response(update: Update, context: ContextTypes.DEFAULT_TYP
         conn = sqlite3.connect('complaints.db')
         c = conn.cursor()
         c.execute('''UPDATE complaints 
-                     SET dean_response = ?, response_timestamp = ?
+                     SET dean_response = ?
                      WHERE id = ?''', 
-                  (dean_response, timestamp, complaint_id))
+                  (dean_response, complaint_id))
         conn.commit()
         conn.close()
         
@@ -431,7 +425,7 @@ async def dean_read_complaints(update: Update, context: ContextTypes.DEFAULT_TYP
     # Получаем все обращения из базы данных
     conn = sqlite3.connect('complaints.db')
     c = conn.cursor()
-    c.execute('''SELECT * FROM complaints ORDER BY timestamp DESC''')
+    c.execute('''SELECT * FROM complaints ORDER BY id DESC''')
     all_complaints = c.fetchall()
     conn.close()
     
@@ -541,6 +535,10 @@ async def dean_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif query.data in ["dean_next_page", "dean_prev_page"]:
         await handle_page_navigation(update, context)
 
+# Обработчик ошибок
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.error(f"Xatolik yuz berdi: {context.error}")
+
 # Основная функция
 def main():
     # Настройка логирования
@@ -552,6 +550,9 @@ def main():
     init_db()
     
     application = Application.builder().token(BOT_TOKEN).build()
+    
+    # Добавляем обработчик ошибок
+    application.add_error_handler(error_handler)
     
     # ConversationHandler для обычных пользователей
     conv_handler = ConversationHandler(
@@ -565,7 +566,8 @@ def main():
             PARENT_STUDENT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_parent_student_name)],
             CONTENT: [MessageHandler(filters.TEXT | filters.PHOTO | filters.Document.IMAGE, handle_content)],
         },
-        fallbacks=[CommandHandler('cancel', cancel)]
+        fallbacks=[CommandHandler('cancel', cancel)],
+        per_message=False
     )
     
     # ConversationHandler для ответов проректора
@@ -574,7 +576,8 @@ def main():
         states={
             DEAN_RESPONSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_dean_response)],
         },
-        fallbacks=[CommandHandler('cancel', cancel)]
+        fallbacks=[CommandHandler('cancel', cancel)],
+        per_message=False
     )
     
     # Обработчики команд
@@ -585,7 +588,12 @@ def main():
     application.add_handler(CallbackQueryHandler(dean_button_handler, pattern="^(dean_read_complaints|dean_next_page|dean_prev_page)$"))
     
     print("Bot ishga tushdi...")
-    application.run_polling()
+    
+    # Запускаем бота
+    application.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True
+    )
 
 if __name__ == '__main__':
     main()
