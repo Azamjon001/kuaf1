@@ -9,7 +9,7 @@ BOT_TOKEN = "8245945626:AAFoGNoWP-JZTRUt9AdoYF9T891GCDXOGlo"
 DEAN_USER_ID = 6224232118  # ID проректора в Telegram
 
 # Состояния диалога
-CATEGORY, NAME, FACULTY, CONTACT, TEACHER_SUBJECT, PARENT_STUDENT_NAME, CONTENT = range(7)
+CATEGORY, NAME, FACULTY, CONTACT, TEACHER_SUBJECT, PARENT_STUDENT_NAME, CONTENT, DEAN_RESPONSE = range(8)
 
 # Инициализация базы данных
 def init_db():
@@ -18,6 +18,7 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS complaints
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   user_id INTEGER,
+                  username TEXT,
                   category TEXT,
                   full_name TEXT,
                   faculty TEXT,
@@ -27,9 +28,21 @@ def init_db():
                   message_type TEXT,
                   content TEXT,
                   file_id TEXT,
-                  timestamp DATETIME)''')
+                  timestamp DATETIME,
+                  dean_response TEXT,
+                  response_timestamp DATETIME)''')
     conn.commit()
     conn.close()
+
+# Функция для очистки Markdown символов
+def clean_markdown(text):
+    if not text:
+        return text
+    # Экранируем специальные символы Markdown
+    escape_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    for char in escape_chars:
+        text = text.replace(char, f'\\{char}')
+    return text
 
 # Команда старт
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -73,25 +86,22 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if category == "student":
         await query.edit_message_text(
-            "👨‍🎓 Siz **Talaba**ni tanladingiz\n\n"
-            "Iltimos, to'liq F.I.O ingizni kiriting:",
-            parse_mode='Markdown'
+            "👨‍🎓 Siz Talaba ni tanladingiz\n\n"
+            "Iltimos, to'liq F.I.O ingizni kiriting:"
         )
         return NAME
         
     elif category == "teacher":
         await query.edit_message_text(
-            "👩‍🏫 Siz **O'qituvchi**ni tanladingiz\n\n"
-            "Iltimos, to'liq F.I.O ingizni kiriting:",
-            parse_mode='Markdown'
+            "👩‍🏫 Siz O'qituvchi ni tanladingiz\n\n"
+            "Iltimos, to'liq F.I.O ingizni kiriting:"
         )
         return NAME
         
     elif category == "parent":
         await query.edit_message_text(
-            "👨‍👩‍👧‍👦 Siz **Ota-ona**ni tanladingiz\n\n"
-            "Iltimos, to'liq F.I.O ingizni kiriting:",
-            parse_mode='Markdown'
+            "👨‍👩‍👧‍👦 Siz Ota-ona ni tanladingiz\n\n"
+            "Iltimos, to'liq F.I.O ingizni kiriting:"
         )
         return NAME
 
@@ -135,7 +145,7 @@ async def get_faculty(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return CONTACT
     else:  # student - сразу переходим к контенту
         await update.message.reply_text(
-            "✅ **Ajoyib! Ma'lumotlar saqlandi.**\n\n"
+            "✅ Ajoyib! Ma'lumotlar saqlandi.\n\n"
             "Endi murojaatingizni yuboring:\n"
             "Sizning barcha materiallaringiz yo'naltiriladi."
         )
@@ -149,11 +159,10 @@ async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     category_name = get_category_name(category)
     
     await update.message.reply_text(
-        f"✅ **Ajoyib! Ma'lumotlar saqlandi.**\n\n"
-        f"**Kategoriya:** {category_name}\n\n"
+        f"✅ Ajoyib! Ma'lumotlar saqlandi.\n\n"
+        f"Kategoriya: {category_name}\n\n"
         "Endi murojaatingizni yuboring:\n"
         "Sizning barcha materiallaringiz yo'naltiriladi."
-
     )
     return CONTENT
 
@@ -161,6 +170,7 @@ async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = context.user_data
     user_id = update.effective_user.id
+    username = update.effective_user.username or update.effective_user.first_name or "Ko'rsatilmagan"
     timestamp = datetime.now()
     
     # Проверяем тип сообщения - разрешены только текст и фото
@@ -205,9 +215,10 @@ async def handle_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Сохраняем все данные в базу
     c.execute('''INSERT INTO complaints 
-                 (user_id, category, full_name, faculty, contact, teacher_subject, parent_student_name, message_type, content, file_id, timestamp)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                 (user_id, username, category, full_name, faculty, contact, teacher_subject, parent_student_name, message_type, content, file_id, timestamp)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
               (user_id, 
+               username,
                user_data['category'],
                user_data['full_name'], 
                user_data.get('faculty', ''), 
@@ -219,7 +230,7 @@ async def handle_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
     
     # Отправляем обращение проректору (ВСЕ В ОДНОМ СООБЩЕНИИ)
-    await send_to_dean(update, context, user_data, message_type, content, file_id)
+    await send_to_dean(update, context, user_data, message_type, content, file_id, username)
     
     # Возвращаем к выбору категории
     await update.message.reply_text(
@@ -231,56 +242,176 @@ async def handle_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # Отправка обращения проректору (ВСЕ В ОДНОМ СООБЩЕНИИ)
-async def send_to_dean(update: Update, context: ContextTypes.DEFAULT_TYPE, user_data, message_type, content, file_id):
+async def send_to_dean(update: Update, context: ContextTypes.DEFAULT_TYPE, user_data, message_type, content, file_id, username):
     try:
         category = user_data['category']
         category_name = get_category_name(category)
+        user_id = update.effective_user.id
+        
+        # Получаем ID последнего обращения для кнопки ответа
+        conn = sqlite3.connect('complaints.db')
+        c = conn.cursor()
+        c.execute('SELECT id FROM complaints WHERE user_id = ? ORDER BY id DESC LIMIT 1', (user_id,))
+        last_complaint = c.fetchone()
+        complaint_id = last_complaint[0] if last_complaint else None
+        conn.close()
+        
+        # Очищаем все текстовые поля от Markdown символов
+        clean_full_name = clean_markdown(user_data['full_name'])
+        clean_username = clean_markdown(username)
+        clean_teacher_subject = clean_markdown(user_data.get('teacher_subject', ''))
+        clean_contact = clean_markdown(user_data.get('contact', ''))
+        clean_parent_student_name = clean_markdown(user_data.get('parent_student_name', ''))
+        clean_faculty = clean_markdown(user_data.get('faculty', ''))
+        clean_content = clean_markdown(content)
         
         # Формируем полное сообщение с информацией и контентом
         full_message = (
-            
             f"📨 **YANGI MUROJAAT**\n\n"
-            
             f"**📋 Murojatchi turi:** {category_name}\n"
-            f"**👤 F.I.O:** {user_data['full_name']}\n"
+            f"**👤 F.I.O:** {clean_full_name}\n"
+            f"**🔗 Telegram:** @{clean_username}\n"
         )
         
         if category == "teacher":
-            full_message += f"**📚 Fan/Mutaxassislik:** {user_data.get('teacher_subject', '')}\n"
-            full_message += f"**📞 Kontaktlar:** {user_data.get('contact', '')}\n"
+            full_message += f"**📚 Fan/Mutaxassislik:** {clean_teacher_subject}\n"
+            full_message += f"**📞 Kontaktlar:** {clean_contact}\n"
         elif category == "parent":
-            full_message += f"**👶 Talaba F.I.O:** {user_data.get('parent_student_name', '')}\n"
-            full_message += f"**🎓 Fakultet/Guruh:** {user_data.get('faculty', '')}\n"
-            full_message += f"**📞 Kontaktlar:** {user_data.get('contact', '')}\n\n"
+            full_message += f"**👶 Talaba F.I.O:** {clean_parent_student_name}\n"
+            full_message += f"**🎓 Fakultet/Guruh:** {clean_faculty}\n"
+            full_message += f"**📞 Kontaktlar:** {clean_contact}\n"
         else:  # student
-            full_message += f"**🎓 Fakultet/Guruh:** {user_data.get('faculty', '')}\n"
+            full_message += f"**🎓 Fakultet/Guruh:** {clean_faculty}\n"
             # Для студентов не показываем контакты
-        
-        full_message += f"**⏰ Vaqt:** {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n\n"
-        
         
         # Добавляем контент обращения
         if message_type == "text":
-            full_message += f"**📝 MUROJAAT MATNI:**\n\n{content}"
+            full_message += f"**📝 MUROJAAT MATNI:**\n\n{clean_content}"
+            
+            # Создаем кнопку ответа
+            keyboard = [
+                [InlineKeyboardButton("📝 Javob yozish", callback_data=f"reply_{complaint_id}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
             
             # Отправляем одно сообщение с текстом
             await context.bot.send_message(
                 chat_id=DEAN_USER_ID,
                 text=full_message,
+                reply_markup=reply_markup,
                 parse_mode='Markdown'
             )
             
         elif message_type == "photo":
             # Для фото - отправляем информацию и фото в одном сообщении
+            keyboard = [
+                [InlineKeyboardButton("📝 Javob yozish", callback_data=f"reply_{complaint_id}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            photo_caption = full_message + (f"\n\n**Tavsif:** {clean_content}" if content else "")
+            
             await context.bot.send_photo(
                 chat_id=DEAN_USER_ID,
                 photo=file_id,
-                caption=full_message + (f"\n\n**Tavsif:** {content}" if content else ""),
+                caption=photo_caption,
+                reply_markup=reply_markup,
                 parse_mode='Markdown'
             )
             
     except Exception as e:
         logging.error(f"Yuborishda xatolik: {e}")
+
+# Обработка кнопки "Ответить"
+async def handle_reply_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    complaint_id = query.data.split('_')[1]
+    
+    # Сохраняем ID обращения для ответа
+    context.user_data['reply_complaint_id'] = complaint_id
+    
+    # Получаем информацию об обращении
+    conn = sqlite3.connect('complaints.db')
+    c = conn.cursor()
+    c.execute('''SELECT user_id, username, full_name, category FROM complaints WHERE id = ?''', (complaint_id,))
+    complaint = c.fetchone()
+    conn.close()
+    
+    if complaint:
+        user_id, username, full_name, category = complaint
+        context.user_data['reply_user_id'] = user_id
+        context.user_data['reply_username'] = username
+        
+        # Очищаем данные от Markdown
+        clean_full_name = clean_markdown(full_name)
+        clean_username = clean_markdown(username)
+        clean_category = get_category_name(category)
+        
+        await query.edit_message_text(
+            f"📝 **Javob yozish**\n\n"
+            f"**Kimga:** {clean_full_name}\n"
+            f"**Kategoriya:** {clean_category}\n"
+            f"**Telegram:** @{clean_username}\n\n"
+            f"Iltimos, javobingizni yuboring:",
+            parse_mode='Markdown'
+        )
+        
+        return DEAN_RESPONSE
+    else:
+        await query.edit_message_text("❌ Murojaat topilmadi!")
+        return ConversationHandler.END
+
+# Обработка ответа проректора
+async def handle_dean_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_data = context.user_data
+    complaint_id = user_data.get('reply_complaint_id')
+    target_user_id = user_data.get('reply_user_id')
+    username = user_data.get('reply_username')
+    
+    if not complaint_id or not target_user_id:
+        await update.message.reply_text("❌ Xatolik yuz berdi!")
+        return ConversationHandler.END
+    
+    dean_response = update.message.text
+    timestamp = datetime.now()
+    
+    try:
+        # Очищаем ответ от Markdown символов
+        clean_dean_response = clean_markdown(dean_response)
+        clean_username = clean_markdown(username)
+        
+        # Сохраняем ответ в базу данных
+        conn = sqlite3.connect('complaints.db')
+        c = conn.cursor()
+        c.execute('''UPDATE complaints 
+                     SET dean_response = ?, response_timestamp = ?
+                     WHERE id = ?''', 
+                  (dean_response, timestamp, complaint_id))
+        conn.commit()
+        conn.close()
+        
+        # Отправляем ответ пользователю
+        await context.bot.send_message(
+            chat_id=target_user_id,
+            text=f"📬 **Sizga javob keldi!**\n\n"
+                 f"**Prorektor:** {clean_dean_response}",
+            parse_mode='Markdown'
+        )
+        
+        await update.message.reply_text(
+            f"✅ Javob muvaffaqiyatli yuborildi!\n"
+            f"**Foydalanuvchi:** @{clean_username}\n"
+            f"**Javob:** {clean_dean_response}",
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        logging.error(f"Javob yuborishda xatolik: {e}")
+        await update.message.reply_text("❌ Javob yuborishda xatolik yuz berdi!")
+    
+    return ConversationHandler.END
 
 def get_category_name(category):
     if category == "student":
@@ -321,48 +452,74 @@ async def dean_read_complaints(update: Update, context: ContextTypes.DEFAULT_TYP
     start_index = current_index
     end_index = min(current_index + 10, len(complaints))
     
-    message_text = f"📨 **Murojaatlar {start_index + 1}-{end_index} dan {len(complaints)}:**\n\n"
+    message_text = f"📨 Murojaatlar {start_index + 1}-{end_index} dan {len(complaints)}:\n\n"
     
     for i in range(start_index, end_index):
         complaint = complaints[i]
         
+        # Очищаем текст от Markdown символов
+        clean_category = get_category_name(complaint[3])
+        clean_full_name = clean_markdown(complaint[4])
+        clean_username = clean_markdown(complaint[2])
+        clean_teacher_subject = clean_markdown(complaint[7])
+        clean_contact = clean_markdown(complaint[6])
+        clean_parent_student_name = clean_markdown(complaint[8])
+        clean_faculty = clean_markdown(complaint[5])
+        clean_content = clean_markdown(complaint[10])
+        clean_response = clean_markdown(complaint[13]) if complaint[13] else None
+        
         # Форматируем сообщение с большими пробелами для лучшей читаемости
         message_text += "═══════════════════════════\n"
-        message_text += f"**📋 KATEGORIYA:** {get_category_name(complaint[2])}\n\n"
-        message_text += f"**👤 F.I.O:** {complaint[3]}\n\n"
+        message_text += f"KATEGORIYA: {clean_category}\n\n"
+        message_text += f"F.I.O: {clean_full_name}\n\n"
+        message_text += f"Telegram: @{clean_username}\n\n"
         
-        if complaint[2] == "teacher":
-            message_text += f"**📚 Fan/Mutaxassislik:** {complaint[6]}\n\n"
-            message_text += f"**📞 Kontaktlar:** {complaint[5]}\n\n"
-        elif complaint[2] == "parent":
-            message_text += f"**👶 Talaba F.I.O:** {complaint[7]}\n\n"
-            message_text += f"**🎓 Fakultet/Guruh:** {complaint[4]}\n\n"
-            message_text += f"**📞 Kontaktlar:** {complaint[5]}\n\n"
+        if complaint[3] == "teacher":
+            message_text += f"Fan/Mutaxassislik: {clean_teacher_subject}\n\n"
+            message_text += f"Kontaktlar: {clean_contact}\n\n"
+        elif complaint[3] == "parent":
+            message_text += f"Talaba F.I.O: {clean_parent_student_name}\n\n"
+            message_text += f"Fakultet/Guruh: {clean_faculty}\n\n"
+            message_text += f"Kontaktlar: {clean_contact}\n\n"
         else:  # student
-            message_text += f"**🎓 Fakultet/Guruh:** {complaint[4]}\n\n"
+            message_text += f"Fakultet/Guruh: {clean_faculty}\n\n"
             # Для студентов не показываем контакты
         
-        message_text += f"**⏰ Vaqt:** {complaint[11][:16]}\n\n"
-        message_text += f"**📝 Murojaat:**\n{complaint[9]}\n\n"
+        message_text += f"Murojaat:\n{clean_content}\n\n"
+        
+        # Добавляем информацию об ответе если есть
+        if clean_response:
+            message_text += f"Javob: {clean_response}\n\n"
+        
         message_text += "═══════════════════════════\n\n"
     
-    # Создаем клавиатуру
+    # Создаем клавиатуру для навигации
     keyboard = []
-    
     if end_index < len(complaints):
-        # Есть еще обращения для показа
-        context.user_data['dean_current_index'] = end_index
-    else:
-        # Все обращения показаны, сбрасываем счетчик
-        context.user_data['dean_current_index'] = 0
+        keyboard.append([InlineKeyboardButton("➡️ Keyingi 10 ta", callback_data="dean_next_page")])
     
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    if current_index > 0:
+        keyboard.append([InlineKeyboardButton("⬅️ Oldingi 10 ta", callback_data="dean_prev_page")])
     
+    reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+    
+    # Отправляем без Markdown разметки
     await query.edit_message_text(
         message_text,
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
+        reply_markup=reply_markup
     )
+
+# Обработка навигации по страницам
+async def handle_page_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "dean_next_page":
+        context.user_data['dean_current_index'] += 10
+    elif query.data == "dean_prev_page":
+        context.user_data['dean_current_index'] = max(0, context.user_data['dean_current_index'] - 10)
+    
+    await dean_read_complaints(update, context)
 
 # Отмена
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -371,13 +528,17 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
-# Обработчик для кнопки проректора
+# Обработчик для кнопок проректора
 async def dean_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
     if query.data == "dean_read_complaints":
         await dean_read_complaints(update, context)
+    elif query.data.startswith("reply_"):
+        await handle_reply_button(update, context)
+    elif query.data in ["dean_next_page", "dean_prev_page"]:
+        await handle_page_navigation(update, context)
 
 # Основная функция
 def main():
@@ -406,15 +567,24 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel)]
     )
     
+    # ConversationHandler для ответов проректора
+    dean_conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(handle_reply_button, pattern="^reply_")],
+        states={
+            DEAN_RESPONSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_dean_response)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
+    
     # Обработчики команд
     application.add_handler(conv_handler)
+    application.add_handler(dean_conv_handler)
     
     # Обработчики callback кнопок для проректора
-    application.add_handler(CallbackQueryHandler(dean_button_handler, pattern="^dean_read_complaints$"))
+    application.add_handler(CallbackQueryHandler(dean_button_handler, pattern="^(dean_read_complaints|dean_next_page|dean_prev_page)$"))
     
     print("Bot ishga tushdi...")
     application.run_polling()
 
 if __name__ == '__main__':
     main()
-
