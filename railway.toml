@@ -1,0 +1,14 @@
+# Создай файл railway.toml в папке проекта
+echo '[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python bot.py"
+
+[env]
+PORT = "8080"' > railway.toml
+
+# Затем закоммить и пуш в GitHub
+git add railway.toml
+git commit -m "Add railway config"
+git push
